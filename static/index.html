@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Smart Attendance Scanner</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: { extend: { colors: { brand: '#6366f1' } } }
+    }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    * { font-family: 'Inter', sans-serif; }
+
+    /* Flash overlays */
+    #flash-overlay {
+      pointer-events: none;
+      position: fixed; inset: 0; z-index: 50;
+      opacity: 0; transition: opacity 0.15s;
+    }
+    #flash-overlay.green { background: rgba(34,197,94,0.25); opacity: 1; }
+    #flash-overlay.red   { background: rgba(239,68,68,0.25);  opacity: 1; }
+
+    /* Countdown ring */
+    .ring-track { stroke: #374151; }
+    .ring-fill  { stroke: #6366f1; stroke-linecap: round;
+                  transition: stroke-dashoffset 1s linear; }
+
+    /* Card slide-in */
+    @keyframes slideIn {
+      from { opacity:0; transform: translateY(-12px); }
+      to   { opacity:1; transform: translateY(0); }
+    }
+    .slide-in { animation: slideIn 0.35s ease forwards; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #1f2937; }
+    ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 2px; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+<!-- Flash overlay -->
+<div id="flash-overlay"></div>
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between">
+  <div class="flex items-center gap-3">
+    <div class="w-8 h-8 rounded-lg bg-brand flex items-center justify-center">
+      <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+          d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+      </svg>
+    </div>
+    <span class="font-bold text-lg tracking-tight">Smart Attendance Scanner</span>
+  </div>
+  <div class="flex items-center gap-4">
+    <span id="ws-status" class="flex items-center gap-1.5 text-xs text-gray-400">
+      <span class="w-2 h-2 rounded-full bg-gray-500" id="ws-dot"></span>
+      Connecting…
+    </span>
+    <span id="clock" class="text-sm text-gray-400 tabular-nums"></span>
+  </div>
+</header>
+
+<!-- ── Main Grid ───────────────────────────────────────────────────────────── -->
+<main class="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+  <!-- LEFT: Camera + Controls -->
+  <div class="lg:col-span-2 flex flex-col gap-4">
+
+    <!-- Camera feed -->
+    <div class="relative bg-gray-900 rounded-2xl overflow-hidden border border-gray-800 aspect-video flex items-center justify-center">
+      <img id="camera-feed"
+           src="/api/camera/stream"
+           class="w-full h-full object-cover hidden"
+           alt="Camera feed" />
+      <div id="camera-placeholder" class="flex flex-col items-center gap-3 text-gray-500">
+        <svg class="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+            d="M15 10l4.553-2.069A1 1 0 0121 8.82v6.36a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+        </svg>
+        <p class="text-sm">Camera not started</p>
+      </div>
+
+      <!-- Scan corner brackets -->
+      <div id="scan-brackets" class="absolute inset-0 hidden pointer-events-none">
+        <div class="absolute top-6 left-6 w-10 h-10 border-t-2 border-l-2 border-brand rounded-tl-lg"></div>
+        <div class="absolute top-6 right-6 w-10 h-10 border-t-2 border-r-2 border-brand rounded-tr-lg"></div>
+        <div class="absolute bottom-6 left-6 w-10 h-10 border-b-2 border-l-2 border-brand rounded-bl-lg"></div>
+        <div class="absolute bottom-6 right-6 w-10 h-10 border-b-2 border-r-2 border-brand rounded-br-lg"></div>
+      </div>
+    </div>
+
+    <!-- Camera controls -->
+    <div class="flex gap-3">
+      <button id="btn-start"
+        onclick="startCamera()"
+        class="flex-1 bg-brand hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        Start Camera
+      </button>
+      <button id="btn-stop"
+        onclick="stopCamera()"
+        class="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-40"
+        disabled>
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10h6v4H9z"/>
+        </svg>
+        Stop Camera
+      </button>
+    </div>
+
+    <!-- Manual QR test -->
+    <div class="bg-gray-900 rounded-2xl border border-gray-800 p-4">
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Manual Scan / Test</p>
+      <div class="flex gap-2">
+        <input id="manual-id" type="text" placeholder="Student ID (e.g. STU001)"
+          class="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-brand" />
+        <button onclick="manualScan()"
+          class="bg-brand hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-semibold transition-colors">
+          Scan
+        </button>
+      </div>
+    </div>
+
+    <!-- Today's log table -->
+    <div class="bg-gray-900 rounded-2xl border border-gray-800 p-4 flex-1">
+      <div class="flex items-center justify-between mb-3">
+        <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Today's Log</p>
+        <button onclick="loadLogs()" class="text-xs text-brand hover:underline">Refresh</button>
+      </div>
+      <div class="overflow-auto max-h-64">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-gray-500 text-xs border-b border-gray-800">
+              <th class="text-left pb-2 font-medium">Name</th>
+              <th class="text-left pb-2 font-medium">ID</th>
+              <th class="text-left pb-2 font-medium">Type</th>
+              <th class="text-left pb-2 font-medium">Time</th>
+            </tr>
+          </thead>
+          <tbody id="log-tbody" class="divide-y divide-gray-800/50"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Scan result + QR viewer + countdown -->
+  <div class="flex flex-col gap-4">
+
+    <!-- Token countdown -->
+    <div class="bg-gray-900 rounded-2xl border border-gray-800 p-4 flex items-center gap-4">
+      <div class="relative w-16 h-16 flex-shrink-0">
+        <svg class="w-16 h-16 -rotate-90" viewBox="0 0 64 64">
+          <circle class="ring-track" cx="32" cy="32" r="28" fill="none" stroke-width="5"/>
+          <circle id="ring-fill" class="ring-fill" cx="32" cy="32" r="28" fill="none" stroke-width="5"
+            stroke-dasharray="175.9" stroke-dashoffset="0"/>
+        </svg>
+        <span id="countdown-num" class="absolute inset-0 flex items-center justify-center text-xl font-bold tabular-nums">15</span>
+      </div>
+      <div>
+        <p class="text-xs text-gray-400 font-medium">QR Token Window</p>
+        <p class="text-sm font-semibold">Rotates every 15s</p>
+        <p class="text-xs text-gray-500 mt-0.5">±1 window drift allowed</p>
+      </div>
+    </div>
+
+    <!-- Last scan result card -->
+    <div id="result-card"
+      class="bg-gray-900 rounded-2xl border border-gray-800 p-5 flex flex-col items-center text-center gap-3 min-h-[220px] justify-center">
+      <div class="w-14 h-14 rounded-full bg-gray-800 flex items-center justify-center">
+        <svg class="w-7 h-7 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+            d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+        </svg>
+      </div>
+      <p class="text-gray-500 text-sm">Awaiting scan…</p>
+    </div>
+
+    <!-- QR Code viewer -->
+    <div class="bg-gray-900 rounded-2xl border border-gray-800 p-4">
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">QR Code Preview</p>
+      <div class="flex gap-2 mb-3">
+        <input id="qr-id-input" type="text" placeholder="Student ID"
+          class="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-brand" />
+        <button onclick="loadQR()"
+          class="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-xl text-sm transition-colors">
+          Load
+        </button>
+      </div>
+      <div id="qr-container" class="flex items-center justify-center bg-white rounded-xl p-3 min-h-[160px]">
+        <p class="text-gray-400 text-xs">Enter an ID above</p>
+      </div>
+      <p class="text-xs text-gray-500 mt-2 text-center">Auto-refreshes with token window</p>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-2 gap-3">
+      <div class="bg-gray-900 rounded-2xl border border-gray-800 p-4 text-center">
+        <p class="text-2xl font-bold text-green-400" id="stat-in">0</p>
+        <p class="text-xs text-gray-400 mt-1">Time In Today</p>
+      </div>
+      <div class="bg-gray-900 rounded-2xl border border-gray-800 p-4 text-center">
+        <p class="text-2xl font-bold text-orange-400" id="stat-out">0</p>
+        <p class="text-xs text-gray-400 mt-1">Time Out Today</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- ── Audio (base64 beeps generated via Web Audio API) ───────────────────── -->
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+// Audio
+// ══════════════════════════════════════════════════════════════════════════════
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let _actx = null;
+function getACtx() { return _actx || (_actx = new AudioCtx()); }
+
+function playBeep(freq, duration, type = 'sine', gain = 0.3) {
+  try {
+    const ctx = getACtx();
+    const osc = ctx.createOscillator();
+    const g   = ctx.createGain();
+    osc.connect(g); g.connect(ctx.destination);
+    osc.type = type; osc.frequency.value = freq;
+    g.gain.setValueAtTime(gain, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    osc.start(); osc.stop(ctx.currentTime + duration);
+  } catch(e) {}
+}
+
+function playSuccess() {
+  playBeep(880, 0.12); setTimeout(() => playBeep(1100, 0.18), 120);
+}
+function playError() {
+  playBeep(220, 0.35, 'sawtooth', 0.25);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Flash overlay
+// ══════════════════════════════════════════════════════════════════════════════
+function flash(color) {
+  const el = document.getElementById('flash-overlay');
+  el.className = color;
+  setTimeout(() => { el.className = ''; }, 600);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Clock
+// ══════════════════════════════════════════════════════════════════════════════
+function updateClock() {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('en-US', { hour12: true });
+}
+setInterval(updateClock, 1000); updateClock();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Token countdown ring
+// ══════════════════════════════════════════════════════════════════════════════
+const CIRCUMFERENCE = 175.9;
+let _qrStudentId = null;
+
+async function syncCountdown() {
+  try {
+    const r = await fetch('/api/token-info');
+    const { seconds_remaining } = await r.json();
+    updateRing(seconds_remaining);
+  } catch(e) {}
+}
+
+function updateRing(sec) {
+  document.getElementById('countdown-num').textContent = sec;
+  const offset = CIRCUMFERENCE * (1 - sec / 15);
+  document.getElementById('ring-fill').style.strokeDashoffset = offset;
+
+  // Colour shift: green → yellow → red
+  const pct = sec / 15;
+  const color = pct > 0.5 ? '#6366f1' : pct > 0.25 ? '#f59e0b' : '#ef4444';
+  document.getElementById('ring-fill').style.stroke = color;
+}
+
+// Local countdown ticks every second, re-syncs with server every 15s
+let _localSec = 15;
+setInterval(() => {
+  _localSec = _localSec <= 1 ? 15 : _localSec - 1;
+  updateRing(_localSec);
+  if (_localSec === 15 && _qrStudentId) refreshQR();   // auto-refresh QR
+}, 1000);
+setInterval(syncCountdown, 15000);
+syncCountdown();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// WebSocket
+// ══════════════════════════════════════════════════════════════════════════════
+let _ws = null;
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  _ws = new WebSocket(`${proto}://${location.host}/ws/scan`);
+
+  _ws.onopen = () => {
+    document.getElementById('ws-dot').className = 'w-2 h-2 rounded-full bg-green-400';
+    document.getElementById('ws-status').lastChild.textContent = ' Connected';
+  };
+  _ws.onclose = () => {
+    document.getElementById('ws-dot').className = 'w-2 h-2 rounded-full bg-red-400';
+    document.getElementById('ws-status').lastChild.textContent = ' Disconnected';
+    setTimeout(connectWS, 3000);
+  };
+  _ws.onmessage = (e) => handleScanEvent(JSON.parse(e.data));
+}
+
+connectWS();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Scan event handler
+// ══════════════════════════════════════════════════════════════════════════════
+function handleScanEvent(data) {
+  if (data.status === 'success') {
+    flash('green'); playSuccess();
+    renderResultCard(data);
+    loadLogs();
+  } else {
+    flash('red'); playError();
+    renderErrorCard(data.message || 'Scan failed');
+  }
+}
+
+function renderResultCard(data) {
+  const u = data.user;
+  const isIn = data.scan_type === 'TIME_IN';
+  const badgeClass = isIn
+    ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+    : 'bg-orange-500/20 text-orange-400 border border-orange-500/30';
+  const time = new Date(data.scanned_at + 'Z').toLocaleTimeString('en-US', { hour12: true });
+
+  const photoHtml = u.photo_url
+    ? `<img src="${u.photo_url}" class="w-16 h-16 rounded-full object-cover border-2 border-brand" />`
+    : `<div class="w-16 h-16 rounded-full bg-brand/20 border-2 border-brand flex items-center justify-center text-2xl font-bold text-brand">
+         ${u.full_name.charAt(0)}
+       </div>`;
+
+  document.getElementById('result-card').innerHTML = `
+    <div class="slide-in flex flex-col items-center gap-3 w-full">
+      ${photoHtml}
+      <div>
+        <p class="font-bold text-lg leading-tight">${u.full_name}</p>
+        <p class="text-xs text-gray-400">${u.custom_id} · ${u.role}</p>
+      </div>
+      <span class="px-3 py-1 rounded-full text-sm font-bold ${badgeClass}">
+        ${data.scan_type.replace('_', ' ')}
+      </span>
+      <p class="text-xs text-gray-500">${time}</p>
+    </div>`;
+}
+
+function renderErrorCard(msg) {
+  document.getElementById('result-card').innerHTML = `
+    <div class="slide-in flex flex-col items-center gap-3">
+      <div class="w-14 h-14 rounded-full bg-red-500/20 border border-red-500/30 flex items-center justify-center">
+        <svg class="w-7 h-7 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </div>
+      <p class="text-red-400 font-semibold text-sm">${msg}</p>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Camera controls
+// ══════════════════════════════════════════════════════════════════════════════
+async function startCamera() {
+  const base = `${location.protocol}//${location.host}`;
+  await fetch(`/api/camera/start?base_url=${encodeURIComponent(base)}`, { method: 'POST' });
+  document.getElementById('camera-feed').classList.remove('hidden');
+  document.getElementById('camera-placeholder').classList.add('hidden');
+  document.getElementById('scan-brackets').classList.remove('hidden');
+  document.getElementById('btn-start').disabled = true;
+  document.getElementById('btn-stop').disabled  = false;
+}
+
+async function stopCamera() {
+  await fetch('/api/camera/stop', { method: 'POST' });
+  document.getElementById('camera-feed').classList.add('hidden');
+  document.getElementById('camera-placeholder').classList.remove('hidden');
+  document.getElementById('scan-brackets').classList.add('hidden');
+  document.getElementById('btn-start').disabled = false;
+  document.getElementById('btn-stop').disabled  = true;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Manual scan (fetches fresh token from server then posts)
+// ══════════════════════════════════════════════════════════════════════════════
+async function manualScan() {
+  const id = document.getElementById('manual-id').value.trim();
+  if (!id) return;
+  // Get fresh QR payload from server (contains valid token)
+  try {
+    const r = await fetch(`/api/qr-payload/${id}`);
+    if (!r.ok) { renderErrorCard('User not found'); flash('red'); playError(); return; }
+    const payload = await r.json();
+    const sr = await fetch('/api/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!sr.ok) {
+      const err = await sr.json();
+      renderErrorCard(err.detail || 'Scan failed');
+      flash('red'); playError();
+    }
+  } catch(e) {
+    renderErrorCard('Network error');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// QR Code viewer
+// ══════════════════════════════════════════════════════════════════════════════
+function loadQR() {
+  const id = document.getElementById('qr-id-input').value.trim();
+  if (!id) return;
+  _qrStudentId = id;
+  refreshQR();
+}
+
+function refreshQR() {
+  if (!_qrStudentId) return;
+  const container = document.getElementById('qr-container');
+  container.innerHTML = `<img src="/api/qr/${_qrStudentId}?t=${Date.now()}"
+    class="w-40 h-40 object-contain" alt="QR Code"
+    onerror="this.parentElement.innerHTML='<p class=text-red-400 text-xs>Not found</p>'" />`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Today's log table
+// ══════════════════════════════════════════════════════════════════════════════
+async function loadLogs() {
+  try {
+    const r = await fetch('/api/logs/today');
+    const logs = await r.json();
+    const tbody = document.getElementById('log-tbody');
+    tbody.innerHTML = '';
+    let inCount = 0, outCount = 0;
+
+    logs.forEach(l => {
+      const isIn = l.scan_type === 'TIME_IN';
+      if (isIn) inCount++; else outCount++;
+      const name = l.full_name || (l.users && l.users.full_name) || '—';
+      const cid  = l.custom_id || (l.users && l.users.custom_id) || '—';
+      const time = new Date(l.scanned_at + 'Z').toLocaleTimeString('en-US', { hour12: true });
+      tbody.insertAdjacentHTML('beforeend', `
+        <tr class="text-xs hover:bg-gray-800/50 transition-colors">
+          <td class="py-2 pr-3 font-medium">${name}</td>
+          <td class="py-2 pr-3 text-gray-400">${cid}</td>
+          <td class="py-2 pr-3">
+            <span class="px-2 py-0.5 rounded-full text-xs font-semibold
+              ${isIn ? 'bg-green-500/20 text-green-400' : 'bg-orange-500/20 text-orange-400'}">
+              ${l.scan_type.replace('_',' ')}
+            </span>
+          </td>
+          <td class="py-2 text-gray-400 tabular-nums">${time}</td>
+        </tr>`);
+    });
+
+    document.getElementById('stat-in').textContent  = inCount;
+    document.getElementById('stat-out').textContent = outCount;
+  } catch(e) {}
+}
+
+loadLogs();
+setInterval(loadLogs, 30000);
+</script>
+</body>
+</html>
